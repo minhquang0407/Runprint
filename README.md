@@ -2,7 +2,7 @@
 
 **Reproducible Research Execution Wrapper**
 
-> *“Run anything. Capture everything needed to reproduce it.”*
+> *"Run anything. Capture everything needed to reproduce it."*
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)

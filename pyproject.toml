@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "runprint"
-version = "0.1.0"
+version = "0.1.1"
 description = "Run anything. Capture everything needed to reproduce it."
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.9"
 license = "Apache-2.0"
 authors = [
     { name = "Runprint Contributors" }
 ]
+
 keywords = ["reproducibility", "research", "ml", "experiment-tracking", "provenance"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -29,6 +30,11 @@ dependencies = [
     "rich>=12.0.0",
     "pydantic>=2.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/minhquang0407/Runprint"
+Repository = "https://github.com/minhquang0407/Runprint.git"
+Issues = "https://github.com/minhquang0407/Runprint/issues"
 
 [project.optional-dependencies]
 dev = [
