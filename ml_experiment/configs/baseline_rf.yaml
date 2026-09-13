@@ -1,0 +1,15 @@
+# Baseline Configuration: Random Forest
+experiment:
+  name: "breast_cancer_rf_baseline"
+  seed: 42
+
+dataset:
+  path: "ml_experiment/data/cancer_dataset.csv"
+  target_col: "target"
+  test_size: 0.2
+
+model:
+  type: "random_forest"
+  n_estimators: 100
+  max_depth: 6
+  random_state: 42

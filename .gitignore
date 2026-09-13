@@ -1,0 +1,37 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# QR local run data and index
+.qr/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Experiment artifacts / checkpoints
+checkpoints/
+ml_experiment/artifacts/
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+qr.cmd

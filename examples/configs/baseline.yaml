@@ -1,0 +1,23 @@
+# Example Experiment Baseline Configuration
+# Used by: qr run -- python examples/pytorch/dummy_train.py --config examples/configs/baseline.yaml
+
+experiment:
+  name: "baseline_vit"
+  seed: 42
+
+training:
+  epochs: 3
+  learning_rate: 0.001
+  batch_size: 32
+  optimizer: "AdamW"
+  weight_decay: 0.01
+
+model:
+  architecture: "vision_transformer_tiny"
+  num_classes: 10
+  dropout: 0.1
+
+dataset:
+  name: "synthetic_vision_dataset"
+  uri: "examples/data/sample_dataset.csv"
+  version: "v1.0"
