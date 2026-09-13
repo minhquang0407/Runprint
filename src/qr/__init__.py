@@ -6,7 +6,7 @@ Run anything. Capture everything needed to reproduce it.
 
 from qr.sdk import artifact, input_dataset, log, note, timer
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = [
     "__version__",
