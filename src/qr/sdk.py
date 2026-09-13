@@ -7,6 +7,7 @@ for experiment code. Gracefully degrades to a no-op if run outside of `qr run`.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -180,3 +181,23 @@ def note(text: str) -> None:
             f.write(json.dumps(payload) + "\n")
     except Exception:
         pass
+
+
+@contextlib.contextmanager
+def timer(name: str = "training_duration_seconds"):
+    """
+    Context manager to measure and automatically log execution time of a training or compute block.
+    Saves the elapsed duration in seconds to metrics.jsonl.
+    Gracefully degrades to a normal context manager if run outside `qr run`.
+
+    Example:
+        with qr.timer("train_duration_seconds"):
+            model.fit(X_train, y_train)
+    """
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = round(time.perf_counter() - t0, 4)
+        log({name: elapsed})
+

@@ -107,6 +107,24 @@ def test_sdk_note(monkeypatch, tmp_path):
     assert "timestamp" in lines[0]
 
 
+def test_sdk_timer(monkeypatch, tmp_path):
+    """qr.timer should measure block execution duration and log it to metrics.jsonl."""
+    import time
+    monkeypatch.setenv("QR_RUN_DIR", str(tmp_path))
+    monkeypatch.setenv("QR_RUN_ID", "test-run-123")
+
+    with qr.timer("custom_training_seconds"):
+        time.sleep(0.05)
+
+    metrics_file = tmp_path / "metrics.jsonl"
+    assert metrics_file.exists()
+
+    lines = [json.loads(line) for line in metrics_file.read_text(encoding="utf-8").strip().splitlines()]
+    assert len(lines) == 1
+    assert "custom_training_seconds" in lines[0]
+    assert lines[0]["custom_training_seconds"] >= 0.04
+
+
 def test_runprint_package_alias():
     """`runprint` must re-export the exact same functions and version as `qr`."""
     assert runprint.__version__ == qr.__version__
@@ -114,3 +132,4 @@ def test_runprint_package_alias():
     assert runprint.artifact is qr.artifact
     assert runprint.input_dataset is qr.input_dataset
     assert runprint.note is qr.note
+    assert runprint.timer is qr.timer

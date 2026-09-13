@@ -82,6 +82,31 @@ def init(name: Optional[str]):
     )
 
 
+def format_timestamp(iso_str: Optional[str]) -> str:
+    """Format ISO timestamp to readable string YYYY-MM-DD HH:MM:SS."""
+    if not iso_str:
+        return "-"
+    clean = iso_str.replace("T", " ")
+    if "." in clean:
+        clean = clean.split(".")[0]
+    elif "+" in clean:
+        clean = clean.split("+")[0]
+    return clean
+
+
+def format_duration(seconds: Optional[float]) -> str:
+    """Format seconds into readable duration string (e.g. 1.25s or 2m 05s)."""
+    if seconds is None:
+        return "-"
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    m, s = divmod(seconds, 60)
+    if m < 60:
+        return f"{int(m)}m {s:.1f}s ({seconds:.1f}s)"
+    h, m = divmod(m, 60)
+    return f"{int(h)}h {int(m)}m {s:.0f}s ({seconds:.1f}s)"
+
+
 def _coerce_param_value(val: str):
     """Convert numeric string to float/int if possible."""
     try:
@@ -232,8 +257,9 @@ def run(command: tuple, tag: tuple, parent: Optional[str], custom_cwd: Optional[
 
     status_color = "green" if manifest.status == "completed" else "red"
     console.print(
-        f"\n[bold {status_color}]Run {manifest.status}:[/bold {status_color}] "
-        f"exit={exec_result.exit_code}, duration={exec_result.duration_seconds}s "
+        f"\n[bold {status_color}]Run {manifest.status}: exit={exec_result.exit_code}[/bold {status_color}], "
+        f"duration={format_duration(exec_result.duration_seconds)}, "
+        f"ended={format_timestamp(manifest.timestamps.finished_at)} "
         f"[dim]({run_id})[/dim]"
     )
 
@@ -276,14 +302,16 @@ def list_runs(limit: int, tag: Optional[str]):
     table.add_column("Commit", style="dim")
     table.add_column("Dirty", justify="center")
     table.add_column("Started", style="dim")
+    table.add_column("Ended", style="dim")
 
     for row in rows:
         st = row["status"]
         st_color = "green" if st == "completed" else ("red" if st == "failed" else "yellow")
-        dur_str = f"{row['duration_seconds']:.1f}s" if row["duration_seconds"] is not None else "-"
+        dur_str = format_duration(row.get("duration_seconds"))
         commit_str = (row["git_commit"][:7]) if row.get("git_commit") else "-"
         dirty_str = "[yellow]yes[/yellow]" if row.get("git_dirty") else "[green]no[/green]"
-        started_str = row["started_at"][:19].replace("T", " ") if row.get("started_at") else "-"
+        started_str = format_timestamp(row.get("started_at"))
+        ended_str = format_timestamp(row.get("finished_at"))
         tags_str = row.get("tags") or "-"
 
         table.add_row(
@@ -295,6 +323,7 @@ def list_runs(limit: int, tag: Optional[str]):
             commit_str,
             dirty_str,
             started_str,
+            ended_str,
         )
 
     console.print(table)
@@ -321,10 +350,15 @@ def show(run_id: str):
     st = manifest.status.upper()
     st_color = "green" if st == "COMPLETED" else "red"
 
+    started_str = format_timestamp(manifest.timestamps.started_at)
+    ended_str = format_timestamp(manifest.timestamps.finished_at) if manifest.timestamps.finished_at else "running / incomplete"
+    dur_str = format_duration(manifest.duration_seconds)
+
     content = []
     content.append(f"[bold]Status:[/bold]       [{st_color}]{st}[/{st_color}] (exit={manifest.exit_code})")
-    content.append(f"[bold]Started:[/bold]      {manifest.timestamps.started_at}")
-    content.append(f"[bold]Duration:[/bold]     {manifest.duration_seconds}s")
+    content.append(f"[bold]Started:[/bold]      {started_str}")
+    content.append(f"[bold]Ended:[/bold]        {ended_str}")
+    content.append(f"[bold]Duration:[/bold]     {dur_str}")
     if manifest.tags:
         content.append(f"[bold]Tags:[/bold]         [magenta]{', '.join(manifest.tags)}[/magenta]")
     content.append(f"[bold]Command:[/bold]      [white]{' '.join(manifest.command)}[/white]")
@@ -575,13 +609,15 @@ def diff(run_id_1: str, run_id_2: str):
     table.add_column(run_id_1, style="cyan")
     table.add_column(run_id_2, style="cyan")
 
-    # Status & Exit
+    # Status & Timing
     table.add_row(
         "Status",
         f"[{'green' if m1.status == 'completed' else 'red'}]{m1.status}[/] (exit={m1.exit_code})",
         f"[{'green' if m2.status == 'completed' else 'red'}]{m2.status}[/] (exit={m2.exit_code})",
     )
-    table.add_row("Duration", f"{m1.duration_seconds}s", f"{m2.duration_seconds}s")
+    table.add_row("Started", format_timestamp(m1.timestamps.started_at), format_timestamp(m2.timestamps.started_at))
+    table.add_row("Ended", format_timestamp(m1.timestamps.finished_at), format_timestamp(m2.timestamps.finished_at))
+    table.add_row("Duration", format_duration(m1.duration_seconds), format_duration(m2.duration_seconds))
     table.add_row("Tags", ", ".join(m1.tags) or "-", ", ".join(m2.tags) or "-")
     table.add_row("Command", " ".join(m1.command), " ".join(m2.command))
 

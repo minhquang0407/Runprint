@@ -89,7 +89,7 @@ class RunIndex:
             if tag:
                 cursor = conn.execute(
                     """
-                    SELECT run_id, parent_run_id, status, command, started_at,
+                    SELECT run_id, parent_run_id, status, command, started_at, finished_at,
                            duration_seconds, exit_code, git_commit, git_dirty, tags
                     FROM runs
                     WHERE (',' || tags || ',') LIKE ?
@@ -101,7 +101,7 @@ class RunIndex:
             else:
                 cursor = conn.execute(
                     """
-                    SELECT run_id, parent_run_id, status, command, started_at,
+                    SELECT run_id, parent_run_id, status, command, started_at, finished_at,
                            duration_seconds, exit_code, git_commit, git_dirty, tags
                     FROM runs
                     ORDER BY started_at DESC
