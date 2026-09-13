@@ -21,21 +21,29 @@ Runprint (`qr`) is a lightweight, framework-agnostic, local-first execution wrap
 - **Atomic & Crash-Safe**: Runs are protected against `Ctrl+C` and crashes with pre-run manifests and atomic writes.
 - **Isolated Worktree Rerun**: Rerun past experiments in clean, dedicated Git worktrees without disturbing your active workspace.
 - **Integrity Doctor & Run Diff**: Built-in health diagnostics (`qr doctor`) and side-by-side run comparisons (`qr diff`).
-- **Tiny Python SDK**: Optional semantic logging (`qr.log`), artifact registration (`qr.artifact`), dataset tracking (`qr.input_dataset`), and notes (`qr.note`).
+- **Tiny Python SDK**: Optional semantic logging (`qr.log`), block timing (`qr.timer`), artifact registration (`qr.artifact`), dataset tracking (`qr.input_dataset`), and notes (`qr.note`).
 
 ---
 
 ## Installation
 
-Clone the repository and install in editable mode:
+### From PyPI (Recommended)
+```bash
+pip install runprint
+```
+*(Both `qr` and `runprint` commands will be available globally in your terminal).*
 
+### From GitHub
+```bash
+pip install git+https://github.com/minhquang0407/Runprint.git
+```
+
+### Local Development
 ```bash
 git clone https://github.com/minhquang0407/Runprint.git
 cd Runprint
 pip install -e .
 ```
-
-> **Tip**: If `qr` is installed in a user script directory not yet on your system `PATH`, you can execute commands via `python -m qr.cli <command>`.
 
 ---
 
@@ -74,7 +82,7 @@ If your repository has uncommitted changes, `qr` automatically captures the patc
 
 Run QR-20260914-A7F2 [baseline, vision] started (09:12:04)
 ... training output ...
-Run completed: exit=0, duration=14.2s (QR-20260914-A7F2)
+Run completed: exit=0, duration=14.2s, ended=2026-09-14 09:12:18 (QR-20260914-A7F2)
 ```
 
 ---
@@ -96,11 +104,11 @@ qr list --tag baseline
 **Example Output:**
 ```text
                               QR Experiment Runs                               
-┌──────────────────┬───────────┬──────────────────┬───────────┬──────────┬─────────┬───────┬─────────────────────┐
-│ Run ID           │ Status    │ Tags             │ Command   │ Duration │ Commit  │ Dirty │ Started             │
-├──────────────────┼───────────┼──────────────────┼───────────┼──────────┼─────────┼───────┼─────────────────────┤
-│ QR-20260914-A7F2 │ completed │ baseline, vision │ python... │    14.2s │ 7cc8be0 │  yes  │ 2026-09-14 09:12:04 │
-└──────────────────┴───────────┴──────────────────┴───────────┴──────────┴─────────┴───────┴─────────────────────┘
+┌──────────────────┬───────────┬──────────────────┬───────────┬──────────┬─────────┬───────┬─────────────────────┬─────────────────────┐
+│ Run ID           │ Status    │ Tags             │ Command   │ Duration │ Commit  │ Dirty │ Started             │ Ended               │
+├──────────────────┼───────────┼──────────────────┼───────────┼──────────┼─────────┼───────┼─────────────────────┼─────────────────────┤
+│ QR-20260914-A7F2 │ completed │ baseline, vision │ python... │    14.2s │ 7cc8be0 │  yes  │ 2026-09-14 09:12:04 │ 2026-09-14 09:12:18 │
+└──────────────────┴───────────┴──────────────────┴───────────┴──────────┴─────────┴───────┴─────────────────────┴─────────────────────┘
 ```
 
 ---
@@ -113,7 +121,7 @@ qr show QR-20260914-A7F2
 ```
 
 **Detailed Report:**
-- **Status & Exit Code**: Outcome and total runtime duration.
+- **Status & Timing**: Outcome, exit code, Started timestamp, Ended timestamp, and formatted duration.
 - **Tags**: Assigned experiment tags.
 - **Source**: Commit hash, branch, and uncommitted diff indicator.
 - **Runtime**: OS platform, Python version, package lock (`environment/pip-freeze.txt`).
@@ -160,7 +168,7 @@ qr diff QR-20260914-A7F2 QR-20260914-B8C1
 **Comparison Matrix:**
 - Compares executed command and argument changes.
 - Compares Git commits and dirty patches.
-- Compares execution duration and status.
+- Compares execution timing (`Started`, `Ended`, `Duration`) and status.
 - Computes numerical metric deltas (e.g. `accuracy: 0.7550` vs `0.8800 (+0.1250)`).
 
 ---
@@ -192,7 +200,12 @@ qr.input_dataset(
     version="v1.0"
 )
 
-# 2. Log structured metrics per step/epoch (saved to metrics.jsonl)
+# 2. Measure & automatically log pure training duration
+with qr.timer("training_duration_seconds"):
+    # model.fit(X_train, y_train)
+    pass
+
+# 3. Log structured metrics per step/epoch (saved to metrics.jsonl)
 for epoch in range(epochs):
     loss, acc = train_step()
     qr.log({
@@ -201,10 +214,10 @@ for epoch in range(epochs):
         "accuracy": round(float(acc), 4)
     })
 
-# 3. Register output artifacts (checksum & size tracked, file not duplicated)
+# 4. Register output artifacts (checksum & size tracked, file not duplicated)
 qr.artifact("checkpoints/best_model.pt", kind="model", metadata={"accuracy": 0.88})
 
-# 4. Add human or script annotations
+# 5. Add human or script annotations
 qr.note("Completed warmup phase, learning rate decayed by factor of 0.1")
 ```
 
