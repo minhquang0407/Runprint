@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "runprint"
 version = "0.1.1"
 description = "Run anything. Capture everything needed to reproduce it."
-readme = { file = "README.md", content-type = "text/markdown" }
+readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
 authors = [
@@ -33,7 +33,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/minhquang0407/Runprint"
-Repository = "https://github.com/minhquang0407/Runprint.git"
+Repository = "https://github.com/minhquang0407/Runprint"
 Issues = "https://github.com/minhquang0407/Runprint/issues"
 
 [project.optional-dependencies]
