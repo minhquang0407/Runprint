@@ -47,11 +47,15 @@ class RunIndex:
                 )
                 """
             )
-            # Migration check: add tags column if missing in older databases
+            # Migration check: add columns if missing in older databases
             cursor = conn.execute("PRAGMA table_info(runs)")
             cols = [row["name"] for row in cursor.fetchall()]
             if "tags" not in cols:
                 conn.execute("ALTER TABLE runs ADD COLUMN tags TEXT")
+            if "restorability_score" not in cols:
+                conn.execute("ALTER TABLE runs ADD COLUMN restorability_score INTEGER")
+            if "restorability_status" not in cols:
+                conn.execute("ALTER TABLE runs ADD COLUMN restorability_status TEXT")
             conn.commit()
 
     def upsert_run(self, manifest: RunManifest) -> None:
@@ -62,8 +66,9 @@ class RunIndex:
                 """
                 INSERT OR REPLACE INTO runs (
                     run_id, parent_run_id, status, command, started_at, finished_at,
-                    duration_seconds, exit_code, git_commit, git_branch, git_dirty, tags, cwd
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    duration_seconds, exit_code, git_commit, git_branch, git_dirty, tags, cwd,
+                    restorability_score, restorability_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     manifest.run_id,
@@ -79,6 +84,8 @@ class RunIndex:
                     1 if (manifest.git and manifest.git.dirty) else 0,
                     tags_str,
                     manifest.cwd,
+                    manifest.restorability_score,
+                    manifest.restorability_status,
                 ),
             )
             conn.commit()
@@ -90,7 +97,8 @@ class RunIndex:
                 cursor = conn.execute(
                     """
                     SELECT run_id, parent_run_id, status, command, started_at, finished_at,
-                           duration_seconds, exit_code, git_commit, git_dirty, tags
+                           duration_seconds, exit_code, git_commit, git_dirty, tags,
+                           restorability_score, restorability_status
                     FROM runs
                     WHERE (',' || tags || ',') LIKE ?
                     ORDER BY started_at DESC
@@ -102,7 +110,8 @@ class RunIndex:
                 cursor = conn.execute(
                     """
                     SELECT run_id, parent_run_id, status, command, started_at, finished_at,
-                           duration_seconds, exit_code, git_commit, git_dirty, tags
+                           duration_seconds, exit_code, git_commit, git_dirty, tags,
+                           restorability_score, restorability_status
                     FROM runs
                     ORDER BY started_at DESC
                     LIMIT ?

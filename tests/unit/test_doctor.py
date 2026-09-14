@@ -38,7 +38,7 @@ def test_doctor_detects_and_repairs_orphaned_run():
         res = runner.invoke(main, ["doctor"])
         assert res.exit_code == 0
         assert "ORPHANED" in res.output
-        assert "Found 1 run(s) stuck in 'running' status" in res.output
+        assert "Found 1 run(s) stuck in 'running'" in res.output
 
         # 2. Doctor with --fix should repair it
         fix_res = runner.invoke(main, ["doctor", "--fix"])

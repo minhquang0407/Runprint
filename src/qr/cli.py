@@ -151,7 +151,14 @@ def extract_cli_parameters(cmd_list: List[str]):
 @click.option("--tag", "-t", multiple=True, help="Tag for labeling the run (can specify multiple)")
 @click.option("--parent", default=None, help="Parent run ID (used for lineage tracking)")
 @click.option("--cwd", "custom_cwd", default=None, help="Custom working directory")
-def run(command: tuple, tag: tuple, parent: Optional[str], custom_cwd: Optional[str]):
+@click.option("--venv-python", default=None, hidden=True, help="Internal path to restored venv python")
+def run(
+    command: tuple,
+    tag: tuple,
+    parent: Optional[str],
+    custom_cwd: Optional[str],
+    venv_python: Optional[str] = None,
+):
     """Execute a command, stream logs, and capture reproducible provenance.
     
     Example:
@@ -188,7 +195,7 @@ def run(command: tuple, tag: tuple, parent: Optional[str], custom_cwd: Optional[
             warning_text.append(f"  ... and {len(git_snap.modified_files) - 10} more\n", style="dim yellow")
         console.print(warning_text)
 
-    runtime_snap = capture_runtime_snapshot(run_dir)
+    runtime_snap = capture_runtime_snapshot(run_dir, repo_root=project_root, python_executable=venv_python)
     hardware_snap = capture_hardware_snapshot()
 
     # Detect explicit config file flags and CLI parameters in argv
@@ -219,6 +226,22 @@ def run(command: tuple, tag: tuple, parent: Optional[str], custom_cwd: Optional[
         "QR_RUN_DIR": str(run_dir),
     }
 
+    # If executing with a restored virtual environment, isolate PATH and VIRTUAL_ENV
+    if venv_python:
+        py_path = Path(venv_python).resolve()
+        bin_dir = py_path.parent
+        venv_root = bin_dir.parent
+
+        if cmd_list and cmd_list[0] in ("python", "python3", "python.exe", sys.executable):
+            cmd_list[0] = str(py_path)
+
+        curr_path = os.environ.get("PATH", "")
+        env_overrides["PATH"] = f"{bin_dir}{os.pathsep}{curr_path}"
+        env_overrides["VIRTUAL_ENV"] = str(venv_root)
+        env_overrides["QR_RESTORED_ENV"] = str(venv_root)
+        if "PYTHONHOME" in os.environ:
+            env_overrides["PYTHONHOME"] = ""
+
     exec_result = run_command_with_tee(
         command=cmd_list,
         cwd=work_dir,
@@ -248,6 +271,16 @@ def run(command: tuple, tag: tuple, parent: Optional[str], custom_cwd: Optional[
     else:
         manifest.status = "failed"
 
+    # Calculate Restorability Score
+    report = None
+    try:
+        from qr.scoring import calculate_restorability_score
+        report = calculate_restorability_score(manifest, run_dir)
+        manifest.restorability_score = report.score
+        manifest.restorability_status = report.status
+    except Exception:
+        pass
+
     storage.save_manifest(manifest)
 
     # Update SQLite index
@@ -256,10 +289,13 @@ def run(command: tuple, tag: tuple, parent: Optional[str], custom_cwd: Optional[
     index.upsert_run(manifest)
 
     status_color = "green" if manifest.status == "completed" else "red"
+    score_msg = ""
+    if report:
+        score_msg = f", restorability={report.score}/100 [{report.status_color}]({report.status})[/{report.status_color}]"
     console.print(
         f"\n[bold {status_color}]Run {manifest.status}: exit={exec_result.exit_code}[/bold {status_color}], "
         f"duration={format_duration(exec_result.duration_seconds)}, "
-        f"ended={format_timestamp(manifest.timestamps.finished_at)} "
+        f"ended={format_timestamp(manifest.timestamps.finished_at)}{score_msg} "
         f"[dim]({run_id})[/dim]"
     )
 
@@ -296,6 +332,7 @@ def list_runs(limit: int, tag: Optional[str]):
     table = Table(title="[bold cyan]QR Experiment Runs[/bold cyan]", border_style="dim")
     table.add_column("Run ID", style="bold cyan", no_wrap=True)
     table.add_column("Status", no_wrap=True)
+    table.add_column("Score", justify="right")
     table.add_column("Tags", style="magenta")
     table.add_column("Command", style="white")
     table.add_column("Duration", justify="right")
@@ -314,9 +351,17 @@ def list_runs(limit: int, tag: Optional[str]):
         ended_str = format_timestamp(row.get("finished_at"))
         tags_str = row.get("tags") or "-"
 
+        score_val = row.get("restorability_score")
+        if score_val is not None:
+            color = "green" if score_val >= 90 else ("yellow" if score_val >= 70 else "red")
+            score_str = f"[{color}]{score_val}[/{color}]"
+        else:
+            score_str = "-"
+
         table.add_row(
             row["run_id"],
             f"[{st_color}]{st}[/{st_color}]",
+            score_str,
             tags_str,
             row["command"],
             dur_str,
@@ -419,11 +464,17 @@ def show(run_id: str):
         except Exception:
             pass
 
+    from qr.scoring import calculate_restorability_score
+
+    scoring_report = calculate_restorability_score(manifest, storage.run_dir)
+
     content.append("\n[bold cyan]REPRODUCIBILITY CONTRACT[/bold cyan]")
-    content.append("  Traceable:   [bold green]YES[/bold green] (Full snapshot & log preserved)")
-    has_lock = bool(manifest.runtime.packages_lock)
-    content.append(f"  Restorable:  {'[green]LIKELY[/green]' if has_lock else '[yellow]PARTIAL[/yellow]'}")
-    content.append("  Lineage:     Parent=" + (manifest.parent_run_id or "Root run"))
+    content.append("  Traceable:    [bold green]YES[/bold green] (Full snapshot & log preserved)")
+    content.append(
+        f"  Restorable:   [bold {scoring_report.status_color}]{scoring_report.status}[/bold {scoring_report.status_color}] "
+        f"({scoring_report.score}/100)"
+    )
+    content.append("  Lineage:      Parent=" + (manifest.parent_run_id or "Root run"))
 
     console.print(
         Panel(
@@ -433,14 +484,58 @@ def show(run_id: str):
         )
     )
 
+    # Restorability Audit Checklist Table
+    audit_table = Table(
+        title=f"[bold]Restorability Audit Checklist -- Score: [{scoring_report.status_color}]{scoring_report.score}/100 ({scoring_report.status})[/{scoring_report.status_color}][/bold]",
+        border_style="dim",
+    )
+    audit_table.add_column("Pillar", style="bold cyan")
+    audit_table.add_column("Criterion", style="white")
+    audit_table.add_column("Status", justify="center")
+    audit_table.add_column("Score", justify="right")
+    audit_table.add_column("Details", style="dim")
+
+    for c in scoring_report.criteria:
+        c_status = "[green]PASS[/green]" if c.passed else "[red]FAIL[/red]"
+        score_display = f"{c.score}/{c.max_score}"
+        score_colored = f"[green]+{score_display}[/green]" if c.passed else f"[red]{score_display}[/red]"
+        audit_table.add_row(c.category, c.name, c_status, score_colored, c.message)
+
+    console.print(audit_table)
+
+    if scoring_report.recommendations:
+        rec_panel = Panel(
+            "\n".join(f"  [yellow]*[/yellow] {r}" for r in scoring_report.recommendations),
+            title="[bold yellow]Reproducibility Recommendations[/bold yellow]",
+            border_style="yellow",
+        )
+        console.print(rec_panel)
+
 
 @main.command()
 @click.argument("run_id")
 @click.option("--allow-hardware-change", is_flag=True, default=False, help="Bypass hardware warnings")
 @click.option("--allow-dataset-mismatch", is_flag=True, default=False, help="Bypass dataset fingerprint mismatch")
+@click.option("--allow-env-mismatch", is_flag=True, default=False, help="Bypass environment package version drift")
 @click.option("--isolated", is_flag=True, default=False, help="Run in an isolated git worktree")
-def rerun(run_id: str, allow_hardware_change: bool, allow_dataset_mismatch: bool, isolated: bool):
+@click.option("--restore-env", is_flag=True, default=False, help="Reconstruct dedicated virtual environment from recorded lockfile")
+@click.option("--reproduce", is_flag=True, default=False, help="1-click reproduction: implies --isolated and --restore-env")
+@click.option("--recreate-env", is_flag=True, default=False, help="Force rebuilding virtual environment even if cached")
+def rerun(
+    run_id: str,
+    allow_hardware_change: bool,
+    allow_dataset_mismatch: bool,
+    allow_env_mismatch: bool,
+    isolated: bool,
+    restore_env: bool,
+    reproduce: bool,
+    recreate_env: bool,
+):
     """Re-execute a previous run with reproducibility preflight and lineage tracking."""
+    if reproduce:
+        isolated = True
+        restore_env = True
+
     project_root = find_project_root()
     if not project_root:
         console.print("[yellow]No QR project found.[/yellow]")
@@ -460,6 +555,8 @@ def rerun(run_id: str, allow_hardware_change: bool, allow_dataset_mismatch: bool
         project_root,
         storage.run_dir,
         allow_dataset_mismatch=allow_dataset_mismatch,
+        allow_env_mismatch=allow_env_mismatch,
+        restore_env=restore_env,
     )
 
     for item in report.checks:
@@ -493,9 +590,28 @@ def rerun(run_id: str, allow_hardware_change: bool, allow_dataset_mismatch: bool
             console.print(f"[bold red]Worktree creation failed:[/bold red] {e}")
             sys.exit(1)
 
+    venv_py_path: Optional[Path] = None
+    if restore_env:
+        lock_path = storage.run_dir / manifest.runtime.packages_lock
+        envs_dir = qr_dir / "envs" / f"env_{run_id}"
+        console.print(f"\n[cyan]Setting up restored virtual environment at:[/cyan] {envs_dir}")
+        try:
+            from qr.env import create_isolated_environment
+
+            venv_py_path = create_isolated_environment(
+                venv_dir=envs_dir,
+                lock_path=lock_path,
+                python_version=manifest.runtime.python_version,
+                recreate=recreate_env,
+            )
+            console.print("[bold green][OK][/bold green] Restored virtual environment ready.")
+        except Exception as e:
+            console.print(f"[bold red]Environment restoration failed:[/bold red] {e}")
+            sys.exit(1)
+
     console.print("\n[bold green]Preflight passed.[/bold green] Spawning rerun process...")
 
-    # Invoke run with --parent run_id
+    # Invoke run with --parent run_id and restored venv python
     ctx = click.get_current_context()
     try:
         ctx.invoke(
@@ -504,6 +620,7 @@ def rerun(run_id: str, allow_hardware_change: bool, allow_dataset_mismatch: bool
             tag=tuple(manifest.tags),
             parent=run_id,
             custom_cwd=str(work_dir),
+            venv_python=str(venv_py_path) if venv_py_path else None,
         )
     finally:
         if isolated_wt_path and isolated_wt_path.exists():
@@ -573,8 +690,29 @@ def doctor(fix: bool):
     else:
         table.add_row("SQLite Index", "[green][OK][/green]", f"{len(runs)} runs indexed accurately")
 
+    # 4. Check Restorability Scores
+    missing_scores = [r for r in runs if r.restorability_score is None]
+    if missing_scores:
+        st_color = "[yellow]BACKFILLED[/yellow]" if fix else "[yellow]UNSCORED[/yellow]"
+        table.add_row(
+            "Restorability Scores",
+            st_color,
+            f"{len(missing_scores)} run(s) missing restorability scores",
+        )
+        if fix:
+            from qr.scoring import calculate_restorability_score
+            for r in missing_scores:
+                storage = RunStorage(qr_dir, r.run_id)
+                report = calculate_restorability_score(r, storage.run_dir)
+                r.restorability_score = report.score
+                r.restorability_status = report.status
+                storage.save_manifest(r)
+                index.upsert_run(r)
+    else:
+        table.add_row("Restorability Scores", "[green][OK][/green]", "All runs scored")
+
     console.print(table)
-    if not fix and (orphaned_runs or len(indexed_rows) != len(runs)):
+    if not fix and (orphaned_runs or len(indexed_rows) != len(runs) or missing_scores):
         console.print("\n[yellow]Run [bold]qr doctor --fix[/bold] to auto-repair these issues.[/yellow]")
 
 
@@ -675,5 +813,154 @@ def diff(run_id_1: str, run_id_2: str):
     console.print(table)
 
 
+@main.group(name="env")
+def env_group():
+    """Manage and inspect experiment execution environments."""
+    pass
+
+
+@env_group.command(name="diff")
+@click.argument("run_id")
+def env_diff_cmd(run_id: str):
+    """Compare recorded packages of a run against the current Python environment."""
+    project_root = find_project_root()
+    if not project_root:
+        console.print("[yellow]No QR project found.[/yellow]")
+        return
+
+    qr_dir = get_qr_dir(project_root)
+    storage = RunStorage(qr_dir, run_id)
+    try:
+        manifest = storage.load_manifest()
+    except FileNotFoundError:
+        console.print(f"[bold red]Error:[/bold red] Run '{run_id}' not found.")
+        return
+
+    if not manifest.runtime.packages_lock:
+        console.print(f"[bold yellow]Warning:[/bold yellow] Run '{run_id}' has no recorded package lockfile.")
+        return
+
+    lock_path = storage.run_dir / manifest.runtime.packages_lock
+    if not lock_path.exists():
+        console.print(f"[bold red]Error:[/bold red] Lockfile '{lock_path}' not found on disk.")
+        return
+
+    from qr.env import diff_environments
+
+    content = lock_path.read_text(encoding="utf-8", errors="replace")
+    report = diff_environments(content, recorded_python=manifest.runtime.python_version)
+
+    console.print(f"\n[bold cyan]Environment Drift Analysis -- {run_id}[/bold cyan]")
+    py_st = (
+        "[green]MATCH[/green]"
+        if report.python_match
+        else f"[bold red]MISMATCH[/bold red] (Run: {report.recorded_python} vs Current: {report.current_python})"
+    )
+    console.print(f"  Python Version: {py_st}")
+
+    table = Table(title=f"Package Comparison ({run_id} vs Current Env)", border_style="dim")
+    table.add_column("Package", style="bold white")
+    table.add_column("Recorded Version", style="cyan")
+    table.add_column("Current Version", style="magenta")
+    table.add_column("Status", justify="center")
+
+    # Mismatched packages
+    for pkg, (rec_ver, cur_ver) in sorted(report.version_mismatches.items()):
+        table.add_row(pkg, rec_ver, cur_ver, "[bold yellow]VERSION DRIFT[/bold yellow]")
+
+    # Missing packages
+    for pkg, rec_ver in sorted(report.missing_packages.items()):
+        table.add_row(pkg, rec_ver, "[dim]<not installed>[/dim]", "[bold red]MISSING[/bold red]")
+
+    # Extra packages (show up to 15)
+    extra_items = list(report.extra_packages.items())
+    for pkg, cur_ver in sorted(extra_items[:15]):
+        table.add_row(pkg, "[dim]<not in run>[/dim]", cur_ver, "[dim cyan]EXTRA[/dim cyan]")
+    if len(extra_items) > 15:
+        table.add_row("...", "...", "...", f"[dim]... and {len(extra_items) - 15} more extras[/dim]")
+
+    console.print(table)
+    summary_parts = []
+    summary_parts.append(f"[green]{len(report.matching_packages)} matching[/green]")
+    if report.version_mismatches:
+        summary_parts.append(f"[bold yellow]{len(report.version_mismatches)} drifted[/bold yellow]")
+    if report.missing_packages:
+        summary_parts.append(f"[bold red]{len(report.missing_packages)} missing[/bold red]")
+    if report.extra_packages:
+        summary_parts.append(f"[dim]{len(report.extra_packages)} extra in current[/dim]")
+
+    console.print(f"\nSummary: {', '.join(summary_parts)}")
+    if report.has_drift:
+        console.print("[yellow][!] Environment drift detected. To rerun anyway, use: qr rerun <run_id> --allow-env-mismatch[/yellow]")
+    else:
+        console.print("[green][OK] Environment matches recorded run perfectly.[/green]")
+
+
+@env_group.command(name="list")
+def env_list_cmd():
+    """List all cached virtual environments managed by qr."""
+    project_root = find_project_root()
+    if not project_root:
+        console.print("[yellow]No QR project found.[/yellow]")
+        return
+
+    qr_dir = get_qr_dir(project_root)
+    from qr.env import list_cached_envs
+
+    cached = list_cached_envs(qr_dir)
+    if not cached:
+        console.print("[dim]No cached virtual environments found in .qr/envs/.[/dim]")
+        return
+
+    table = Table(title="Cached Virtual Environments", border_style="dim")
+    table.add_column("Run ID", style="bold cyan")
+    table.add_column("Status", justify="center")
+    table.add_column("Size (MB)", justify="right")
+    table.add_column("Created", style="dim")
+    table.add_column("Path", style="dim")
+
+    total_mb = 0.0
+    for env in cached:
+        status = "[green]VALID[/green]" if env["valid"] else "[bold red]INVALID[/bold red]"
+        table.add_row(
+            env["run_id"],
+            status,
+            f"{env['size_mb']:.1f}",
+            env["created_at"],
+            env["path"],
+        )
+        total_mb += env["size_mb"]
+
+    console.print(table)
+    console.print(f"\n[dim]Total cached environments: {len(cached)} ({total_mb:.1f} MB)[/dim]")
+    console.print("[dim]Use 'qr env clean --all' to reclaim disk space.[/dim]")
+
+
+@env_group.command(name="clean")
+@click.option("--run-id", default=None, help="Specific run ID environment to remove.")
+@click.option("--all", "clean_all", is_flag=True, help="Remove all cached virtual environments.")
+def env_clean_cmd(run_id: Optional[str], clean_all: bool):
+    """Clean cached virtual environments created for reruns."""
+    if not run_id and not clean_all:
+        console.print("[yellow]Specify either --run-id <run_id> or --all to clean environments.[/yellow]")
+        return
+
+    project_root = find_project_root()
+    if not project_root:
+        console.print("[yellow]No QR project found.[/yellow]")
+        return
+
+    qr_dir = get_qr_dir(project_root)
+    from qr.env import clean_cached_envs
+
+    count = clean_cached_envs(qr_dir, run_id=run_id if not clean_all else None)
+    if count == 0:
+        console.print("[dim]No matching cached environments found to remove.[/dim]")
+    else:
+        console.print(f"[green][OK][/green] Removed {count} cached virtual environment(s).")
+
+
 if __name__ == "__main__":
     main()
+
+

@@ -509,6 +509,16 @@ def _finalize_state(state: _RunState, status: str = "completed", exit_code: int 
         except Exception:
             pass
 
+    # Calculate Restorability Score
+    report = None
+    try:
+        from qr.scoring import calculate_restorability_score
+        report = calculate_restorability_score(state.manifest, state.run_dir)
+        state.manifest.restorability_score = report.score
+        state.manifest.restorability_status = report.status
+    except Exception:
+        pass
+
     state.storage.save_manifest(state.manifest)
 
     # Update SQLite index
@@ -525,10 +535,13 @@ def _finalize_state(state: _RunState, status: str = "completed", exit_code: int 
         from rich.console import Console
         console = Console()
         status_color = "green" if status == "completed" else "red"
+        score_msg = ""
+        if report:
+            score_msg = f", restorability={report.score}/100 [{report.status_color}]({report.status})[/{report.status_color}]"
         console.print(
             f"\n[bold {status_color}]Run {status}: exit={exit_code}[/bold {status_color}], "
             f"duration={_format_duration(duration)}, "
-            f"ended={_format_timestamp(now_iso)} "
+            f"ended={_format_timestamp(now_iso)}{score_msg} "
             f"[dim]({state.run_id})[/dim]"
         )
     except Exception:
@@ -671,7 +684,7 @@ def activate(
             warning_text.append(f"  ... and {len(git_snap.modified_files) - 10} more\n", style="dim yellow")
         console.print(warning_text)
 
-    runtime_snap = capture_runtime_snapshot(run_dir)
+    runtime_snap = capture_runtime_snapshot(run_dir, repo_root=project_root)
     hardware_snap = capture_hardware_snapshot()
 
     # Command detection from sys.argv
@@ -825,7 +838,7 @@ class _RunContextManager:
 
         # Snapshots
         git_snap = capture_git_snapshot(project_root, run_dir)
-        runtime_snap = capture_runtime_snapshot(run_dir)
+        runtime_snap = capture_runtime_snapshot(run_dir, repo_root=project_root)
         hardware_snap = capture_hardware_snapshot()
 
         if self.command:

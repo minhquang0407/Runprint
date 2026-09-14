@@ -37,13 +37,16 @@ def run_rerun_preflight(
     repo_root: Path,
     run_dir: Path,
     allow_dataset_mismatch: bool = False,
+    allow_env_mismatch: bool = False,
+    restore_env: bool = False,
 ) -> RerunPreflightReport:
     """
     Run preflight reproducibility checks:
       1. Git commit availability
       2. Dirty patch applicability (if git.diff exists)
-      3. Environment lock availability
-      4. Hardware differences (GPU, platform)
+      3. Environment lock & package drift detection (or restoration readiness)
+      4. Dataset availability & checksums
+      5. Hardware differences (OS, GPU)
     """
     checks: List[PreflightCheckItem] = []
     can_proceed = True
@@ -105,17 +108,112 @@ def run_rerun_preflight(
                     )
                 )
 
-    # 3. Environment lock check
-    if manifest.runtime.packages_lock:
-        lock_path = run_dir / manifest.runtime.packages_lock
-        if lock_path.exists():
+    # 3. Environment lock & drift check / restoration readiness
+    if restore_env:
+        if not manifest.runtime.packages_lock:
             checks.append(
                 PreflightCheckItem(
-                    name="Environment Lock",
-                    passed=True,
-                    message=f"Lockfile available at {manifest.runtime.packages_lock}",
+                    name="Environment Restoration",
+                    passed=False,
+                    message="Cannot restore environment: no package lockfile recorded in manifest",
                 )
             )
+            can_proceed = False
+        else:
+            lock_path = run_dir / manifest.runtime.packages_lock
+            if not lock_path.is_file():
+                checks.append(
+                    PreflightCheckItem(
+                        name="Environment Restoration",
+                        passed=False,
+                        message=f"Cannot restore environment: lockfile '{manifest.runtime.packages_lock}' not found on disk",
+                    )
+                )
+                can_proceed = False
+            else:
+                checks.append(
+                    PreflightCheckItem(
+                        name="Environment Restoration",
+                        passed=True,
+                        message=f"Lockfile available ({manifest.runtime.packages_lock}). Dedicated virtual environment will be created.",
+                    )
+                )
+    elif manifest.runtime.packages_lock:
+        lock_path = run_dir / manifest.runtime.packages_lock
+        if lock_path.exists():
+            from qr.env import diff_environments
+
+            content = lock_path.read_text(encoding="utf-8", errors="replace")
+            env_diff = diff_environments(content, recorded_python=manifest.runtime.python_version)
+
+            if not env_diff.python_match:
+                checks.append(
+                    PreflightCheckItem(
+                        name="Python Version Drift",
+                        passed=False,
+                        message=(
+                            f"Recorded Python {env_diff.recorded_python}, but current environment is "
+                            f"Python {env_diff.current_python}"
+                        ),
+                        is_warning=allow_env_mismatch,
+                    )
+                )
+                if not allow_env_mismatch:
+                    can_proceed = False
+
+            if env_diff.missing_packages:
+                missing_sample = list(env_diff.missing_packages.keys())[:5]
+                checks.append(
+                    PreflightCheckItem(
+                        name="Environment Drift (Missing)",
+                        passed=False,
+                        message=(
+                            f"{len(env_diff.missing_packages)} package(s) missing from current environment: "
+                            f"{', '.join(missing_sample)}{'...' if len(env_diff.missing_packages) > 5 else ''}. "
+                            f"Run 'qr env diff {manifest.run_id}' for details."
+                        ),
+                        is_warning=allow_env_mismatch,
+                    )
+                )
+                if not allow_env_mismatch:
+                    can_proceed = False
+
+            if env_diff.version_mismatches:
+                sample_items = [
+                    f"{pkg} ({v[0]} -> {v[1]})"
+                    for pkg, v in list(env_diff.version_mismatches.items())[:3]
+                ]
+                checks.append(
+                    PreflightCheckItem(
+                        name="Environment Drift (Mismatch)",
+                        passed=False,
+                        message=(
+                            f"{len(env_diff.version_mismatches)} package(s) version drift: "
+                            f"{', '.join(sample_items)}{'...' if len(env_diff.version_mismatches) > 3 else ''}. "
+                            f"Run 'qr env diff {manifest.run_id}' for details."
+                        ),
+                        is_warning=allow_env_mismatch,
+                    )
+                )
+                if not allow_env_mismatch:
+                    can_proceed = False
+
+            if not env_diff.has_drift:
+                checks.append(
+                    PreflightCheckItem(
+                        name="Environment Integrity",
+                        passed=True,
+                        message=f"All {len(env_diff.matching_packages)} recorded packages match current environment",
+                    )
+                )
+            elif allow_env_mismatch:
+                checks.append(
+                    PreflightCheckItem(
+                        name="Environment Integrity",
+                        passed=True,
+                        message="Environment drift detected but bypassed via --allow-env-mismatch",
+                    )
+                )
         else:
             checks.append(
                 PreflightCheckItem(
@@ -125,6 +223,15 @@ def run_rerun_preflight(
                     is_warning=True,
                 )
             )
+    else:
+        checks.append(
+            PreflightCheckItem(
+                name="Environment Lock",
+                passed=False,
+                message="No package lockfile recorded in manifest",
+                is_warning=True,
+            )
+        )
 
     # 4. Dataset checks
     for ds in manifest.inputs.datasets:

@@ -15,14 +15,15 @@ Runprint (`qr`) is a lightweight, framework-agnostic, local-first execution wrap
 
 - **Framework-Agnostic**: Wrap any arbitrary process (Python, Bash, C++, simulation binaries) without modifying your training loops.
 - **Local-First**: All manifests, metadata, and logs are stored in `.qr/`. Zero accounts, zero cloud dependencies, zero external servers.
-- **Dirty Git Snapshotting**: Never lose an experiment to uncommitted changes. `qr` captures `git.diff` alongside the commit hash.
-- **Reproducibility Contract**: Transparent categorization of run reproducibility (`TRACEABLE`, `RESTORABLE`, `REPRODUCIBLE`).
+- **Complete Git & Untracked File Snapshotting**: Never lose an experiment to uncommitted edits or newly created files. `qr` captures `git.diff` including untracked source files cleanly without dirtying your Git index.
+- **1-Click Reproduction (`qr rerun --reproduce`)**: Automatically recreate past experiments in an isolated temporary Git worktree with an isolated reconstructed virtual environment.
+- **Environment Drift & Management (`qr env`)**: Inspect package drift between runs and active Python (`qr env diff`), cache virtualenvs, and reclaim disk space (`qr env list`, `qr env clean`).
+- **Secure ML Environment Capture**: Records essential ML determinism flags (`CUDA_VISIBLE_DEVICES`, `OMP_NUM_THREADS`, etc.) via a strict security allowlist that never leaks secrets.
+- **0–100 Restorability Scoring**: Granular 3-pillar audit scoring (Source Code 35 pts, Environment 35 pts, Data & Inputs 30 pts) with actionable reproducibility checklists in `qr show`.
 - **Live Tee Logging**: Streams `stdout` and `stderr` directly to your terminal while persisting clean log files to disk.
-- **Atomic & Crash-Safe**: Runs are protected against `Ctrl+C` and crashes with pre-run manifests and atomic writes.
-- **Isolated Worktree Rerun**: Rerun past experiments in clean, dedicated Git worktrees without disturbing your active workspace.
-- **Integrity Doctor & Run Diff**: Built-in health diagnostics (`qr doctor`) and side-by-side run comparisons (`qr diff`).
-- **In-Code Activation & Context Manager**: Run scripts directly via IDE Run/Compile buttons using `qr.activate()`, or run hyperparameter search loops with `with qr.run()`.
-- **Tiny Python SDK**: Semantic logging (`qr.log`), in-code parameters (`qr.params`), block timing (`qr.timer`), artifact registration (`qr.artifact`), dataset tracking (`qr.input_dataset`), and notes (`qr.note`).
+- **Atomic & Crash-Safe**: Runs are protected against `Ctrl+C` and crashes with pre-run manifests, atomic writes, and diagnostic auto-repair (`qr doctor`).
+- **Tiny Python SDK & In-Code Activation**: In-code runner `qr.activate()` for IDE buttons, hyperparameter loops with `with qr.run()`, semantic logging (`qr.log`), in-code parameters (`qr.params`), block timing (`qr.timer`), artifact registration (`qr.artifact`), dataset tracking (`qr.input_dataset`), and notes (`qr.note`).
+
 
 ---
 
@@ -114,52 +115,83 @@ qr list --tag baseline
 
 ---
 
-### 4. Inspect Run Provenance (`qr show`)
-Inspect full source code state, hardware, runtime, registered artifacts, and metrics:
+### 4. Inspect Run Provenance & Restorability (`qr show`)
+Inspect full source code state, hardware, runtime, registered artifacts, metrics, and the **Restorability Audit Checklist**:
 
 ```bash
 qr show QR-20260914-A7F2
 ```
 
-**Detailed Report:**
-- **Status & Timing**: Outcome, exit code, Started timestamp, Ended timestamp, and formatted duration.
-- **Tags**: Assigned experiment tags.
-- **Source**: Commit hash, branch, and uncommitted diff indicator.
-- **Runtime**: OS platform, Python version, package lock (`environment/pip-freeze.txt`).
-- **Hardware**: CPU cores, total RAM, NVIDIA GPU model and driver version.
-- **Inputs**: Declared dataset URIs and cryptographic SHA256 fingerprints.
-- **Metrics**: Summary of metrics logged via the SDK.
-- **Artifacts**: Model checkpoints and output files registered with sizes and checksums.
-- **Reproducibility Contract**: Traceability, restorability score, and parent run lineage.
+**Restorability Scoring Rubric (0 – 100):**
+- **Source Code (Max 35 pts)**: Valid Git commit (+10), clean tree or complete `git.diff` patch (+15), all untracked source files captured (+10).
+- **Environment (Max 35 pts)**: Pinned Python version (+10), package lockfile recorded (+15), zero editable/local dependencies (+10).
+- **Data & Inputs (Max 30 pts)**: Pure compute with no external data (+30), OR all datasets declared (+10) and 100% verified with SHA-256 fingerprints (+20).
+
+**Score Bands:**
+- `90 - 100`: `HIGHLY_RESTORABLE` (Green)
+- `70 - 89`: `PARTIALLY_RESTORABLE` (Yellow)
+- `< 70`: `LOW_RESTORABILITY` (Red)
+
+The command prints a transparent **Restorability Audit Checklist** and targeted recommendations to help you make your experiment 100% reproducible.
 
 ---
 
-### 5. Re-execute an Experiment (`qr rerun`)
-Rerun a previous experiment with automated preflight reproducibility validation:
+### 5. Inspect & Manage Environments (`qr env`)
+Inspect package drift and manage isolated virtual environments:
 
 ```bash
-# Basic rerun (in current working directory)
-qr rerun QR-20260914-A7F2
+# Compare recorded packages against active Python environment
+qr env diff QR-20260914-A7F2
 
-# Isolated rerun in a dedicated temporary Git worktree (Recommended)
+# List all cached virtual environments in .qr/envs/
+qr env list
+
+# Clean cached virtual environments to reclaim disk space
+qr env clean --run-id QR-20260914-A7F2
+qr env clean --all
+```
+
+`qr env diff` identifies:
+- **Version Drift**: Packages installed in both environments with differing versions.
+- **Missing Packages**: Packages recorded in the experiment that are absent from your current environment.
+- **Extra Packages**: Packages present currently that were not installed during the original run.
+- **Python Version**: Major.minor Python compatibility match.
+
+---
+
+### 6. 1-Click Reproduction & Rerun (`qr rerun`)
+Rerun a previous experiment with automated preflight reproducibility validation and virtual environment restoration:
+
+```bash
+# 1-Click full reproduction (isolated git worktree + isolated virtualenv)
+qr rerun QR-20260914-A7F2 --reproduce
+
+# Restore exact virtual environment from recorded lockfile into .qr/envs/
+qr rerun QR-20260914-A7F2 --restore-env
+
+# Isolated rerun in a dedicated temporary Git worktree
 qr rerun QR-20260914-A7F2 --isolated
 
 # Bypass dataset fingerprint mismatch if dataset was updated intentionally
 qr rerun QR-20260914-A7F2 --allow-dataset-mismatch
+
+# Bypass package version drift or missing packages
+qr rerun QR-20260914-A7F2 --allow-env-mismatch
 ```
 
 **Preflight Checks Performed:**
 - `[OK] Git Commit`: Verifies commit exists in local git history.
 - `[OK] Dirty Patch`: Verifies `git.diff` applies cleanly.
-- `[OK] Environment Lock`: Verifies package lock exists.
+- `[OK] Environment Integrity / Restoration`: Verifies package lockfile readiness for automated venv reconstruction (or compares against current environment).
 - `[OK] Dataset Fingerprint`: Re-hashes input datasets and verifies integrity.
 - `[!] Hardware/OS Difference`: Warns if rerun is performed on different GPUs or platforms.
 
 The rerun creates a **new run** linked to the parent (`Lineage: Parent=QR-20260914-A7F2`), preserving full historical lineage.
 
+
 ---
 
-### 6. Compare Two Experiments (`qr diff`)
+### 7. Compare Two Experiments (`qr diff`)
 Compare configuration, source code, duration, and metrics between two runs:
 
 ```bash
@@ -174,14 +206,14 @@ qr diff QR-20260914-A7F2 QR-20260914-B8C1
 
 ---
 
-### 7. Diagnose & Auto-Repair (`qr doctor`)
+### 8. Diagnose & Auto-Repair (`qr doctor`)
 Check repository health, detect runs interrupted by power loss or crashes, and sync caches:
 
 ```bash
 # Run integrity diagnostics
 qr doctor
 
-# Auto-repair orphaned runs and rebuild SQLite index
+# Auto-repair orphaned runs, backfill restorability scores, and rebuild SQLite index
 qr doctor --fix
 ```
 

@@ -22,6 +22,8 @@ class GitSnapshot(BaseModel):
     diff_file: Optional[str] = Field(default=None, description="Relative path to git.diff if dirty")
     remote_url: Optional[str] = Field(default=None, description="Origin remote repository URL")
     modified_files: List[str] = Field(default_factory=list, description="List of uncommitted modified files")
+    untracked_ignored: List[str] = Field(default_factory=list, description="List of untracked files ignored due to .qrignore or size limits")
+
 
 
 class RuntimeSnapshot(BaseModel):
@@ -49,6 +51,11 @@ class DatasetInput(BaseModel):
     uri: str = Field(description="Path or URI to the dataset")
     version: Optional[str] = Field(default=None, description="Dataset version tag")
     fingerprint: Optional[str] = Field(default=None, description="Cryptographic hash or checksum")
+    sha256: Optional[str] = Field(default=None, description="SHA-256 hash or checksum")
+
+    @property
+    def path(self) -> str:
+        return self.uri
 
 
 class RunInputs(BaseModel):
@@ -88,6 +95,8 @@ class RunManifest(BaseModel):
     status: str = Field(default="created", description="created | running | completed | failed | interrupted")
     exit_code: Optional[int] = Field(default=None)
     duration_seconds: Optional[float] = Field(default=None)
+    restorability_score: Optional[int] = Field(default=None, description="Calculated restorability score (0-100)")
+    restorability_status: Optional[str] = Field(default=None, description="HIGHLY_RESTORABLE | PARTIALLY_RESTORABLE | LOW_RESTORABILITY")
     metrics_file: Optional[str] = Field(default="metrics.jsonl")
     artifacts_file: Optional[str] = Field(default="artifacts.json")
     stdout_file: Optional[str] = Field(default="stdout.log")
