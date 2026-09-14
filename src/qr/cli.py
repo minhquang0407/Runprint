@@ -50,7 +50,12 @@ from qr.snapshot.git import capture_git_snapshot
 from qr.snapshot.hardware import capture_hardware_snapshot
 from qr.snapshot.runtime import capture_runtime_snapshot
 from qr.storage.index import RunIndex
-from qr.storage.local import RunStorage, generate_run_id
+from qr.storage.local import (
+    RunStorage,
+    generate_next_version_run_id,
+    generate_run_id,
+    resolve_run_id,
+)
 from qr.subprocess_runner import run_command_with_tee
 
 console = Console()
@@ -181,7 +186,10 @@ def run(
         init_project(project_root)
 
     qr_dir = get_qr_dir(project_root)
-    run_id = generate_run_id()
+    if parent:
+        run_id = generate_next_version_run_id(parent, qr_dir)
+    else:
+        run_id = generate_run_id()
     storage = RunStorage(qr_dir, run_id)
     run_dir = storage.init_run_dir()
 
@@ -415,6 +423,7 @@ def show(run_id: str):
         return
 
     qr_dir = get_qr_dir(project_root)
+    run_id = resolve_run_id(qr_dir, run_id)
     storage = RunStorage(qr_dir, run_id)
     try:
         manifest = storage.load_manifest()
@@ -439,6 +448,8 @@ def show(run_id: str):
         content.append(f"[bold]Tags:[/bold]         [magenta]{', '.join(manifest.tags)}[/magenta]")
     content.append(f"[bold]Command:[/bold]      [white]{' '.join(manifest.command)}[/white]")
     content.append(f"[bold]Directory:[/bold]    [dim]{manifest.cwd}[/dim]")
+    if manifest.parent_run_id:
+        content.append(f"[bold]Lineage:[/bold]      [cyan]Parent = {manifest.parent_run_id}[/cyan]")
 
     content.append("\n[bold cyan]SOURCE[/bold cyan]")
     if manifest.git:
@@ -573,6 +584,7 @@ def rerun(
         return
 
     qr_dir = get_qr_dir(project_root)
+    run_id = resolve_run_id(qr_dir, run_id)
     storage = RunStorage(qr_dir, run_id)
     try:
         manifest = storage.load_manifest()
@@ -758,6 +770,8 @@ def diff(run_id_1: str, run_id_2: str):
         return
 
     qr_dir = get_qr_dir(project_root)
+    run_id_1 = resolve_run_id(qr_dir, run_id_1)
+    run_id_2 = resolve_run_id(qr_dir, run_id_2)
     storage1 = RunStorage(qr_dir, run_id_1)
     storage2 = RunStorage(qr_dir, run_id_2)
 
@@ -860,6 +874,7 @@ def env_diff_cmd(run_id: str):
         return
 
     qr_dir = get_qr_dir(project_root)
+    run_id = resolve_run_id(qr_dir, run_id)
     storage = RunStorage(qr_dir, run_id)
     try:
         manifest = storage.load_manifest()
@@ -984,6 +999,8 @@ def env_clean_cmd(run_id: Optional[str], clean_all: bool):
     qr_dir = get_qr_dir(project_root)
     from qr.env import clean_cached_envs
 
+    if run_id:
+        run_id = resolve_run_id(qr_dir, run_id)
     count = clean_cached_envs(qr_dir, run_id=run_id if not clean_all else None)
     if count == 0:
         console.print("[dim]No matching cached environments found to remove.[/dim]")

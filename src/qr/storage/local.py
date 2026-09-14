@@ -15,11 +15,68 @@ from typing import List, Optional
 from qr.manifest import RunManifest
 
 
-def generate_run_id() -> str:
-    """Generate a human-readable run identifier: QR-YYYYMMDD-XXXX."""
+import re
+
+
+def generate_run_id(version: int = 1) -> str:
+    """Generate a human-readable run identifier: QR-YYYYMMDD-XXXX-v1."""
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
     rand_hex = secrets.token_hex(2).upper()
-    return f"QR-{date_str}-{rand_hex}"
+    return f"QR-{date_str}-{rand_hex}-v{version}"
+
+
+def extract_base_run_id(run_id: str) -> str:
+    """Strip trailing -v<number> suffix if present (e.g. QR-20260914-1DF6-v2 -> QR-20260914-1DF6)."""
+    return re.sub(r"-v\d+$", "", run_id)
+
+
+def generate_next_version_run_id(parent_run_id: str, qr_dir: Path) -> str:
+    """
+    Generate the next linear versioned run ID for a rerun family (e.g. v1 -> v2 -> v3).
+    Scans existing runs in .qr/runs/ matching base_id to compute max(existing) + 1.
+    """
+    base_id = extract_base_run_id(parent_run_id)
+    runs_dir = qr_dir / "runs"
+    max_ver = 1
+    if runs_dir.is_dir():
+        for item in runs_dir.iterdir():
+            if item.is_dir() and item.name.startswith(base_id):
+                m = re.search(r"-v(\d+)$", item.name)
+                if m:
+                    max_ver = max(max_ver, int(m.group(1)))
+                elif item.name == base_id:
+                    max_ver = max(max_ver, 1)
+
+    return f"{base_id}-v{max_ver + 1}"
+
+
+def resolve_run_id(qr_dir: Path, query: str) -> str:
+    """
+    Resolve a user query to an existing run ID.
+    Supports exact match, shorthand without -v (resolves to highest version), or returns query as-is.
+    """
+    runs_dir = qr_dir / "runs"
+    if not runs_dir.is_dir() or not query:
+        return query
+
+    # 1. Exact match
+    if (runs_dir / query).is_dir():
+        return query
+
+    # 2. Query without version suffix (e.g. QR-20260914-1DF6) -> pick highest version
+    candidates = []
+    for item in runs_dir.iterdir():
+        if item.is_dir() and (item.name == query or item.name.startswith(f"{query}-v")):
+            m = re.search(r"-v(\d+)$", item.name)
+            ver = int(m.group(1)) if m else 1
+            candidates.append((ver, item.name))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+
+    return query
+
 
 
 def atomic_write_text(target_path: Path, content: str) -> None:
