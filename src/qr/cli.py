@@ -241,6 +241,37 @@ def run(
         env_overrides["QR_RESTORED_ENV"] = str(venv_root)
         if "PYTHONHOME" in os.environ:
             env_overrides["PYTHONHOME"] = ""
+    else:
+        # Standard execution: resolve python to active virtualenv or current sys.executable
+        if cmd_list and cmd_list[0] in ("python", "python3", "python.exe"):
+            resolved_py = None
+            active_venv = os.environ.get("VIRTUAL_ENV")
+            if active_venv:
+                venv_bin = Path(active_venv) / ("Scripts" if sys.platform == "win32" else "bin")
+                cand = venv_bin / ("python.exe" if sys.platform == "win32" else "python")
+                if cand.is_file():
+                    resolved_py = cand
+
+            if not resolved_py and sys.executable and Path(sys.executable).is_file():
+                resolved_py = Path(sys.executable)
+
+            if resolved_py:
+                cmd_list[0] = str(resolved_py)
+                curr_path = os.environ.get("PATH", "")
+                bin_dir = resolved_py.parent
+                env_overrides["PATH"] = f"{bin_dir}{os.pathsep}{curr_path}"
+                if active_venv:
+                    env_overrides["VIRTUAL_ENV"] = active_venv
+                elif (bin_dir.parent / "pyvenv.cfg").exists():
+                    env_overrides["VIRTUAL_ENV"] = str(bin_dir.parent)
+
+    # Always ensure the QR SDK package directory is accessible in child python processes
+    qr_pkg_dir = str(Path(__file__).resolve().parent.parent)
+    curr_pypath = os.environ.get("PYTHONPATH", "")
+    pypath_parts = curr_pypath.split(os.pathsep) if curr_pypath else []
+    if qr_pkg_dir not in pypath_parts:
+        env_overrides["PYTHONPATH"] = f"{qr_pkg_dir}{os.pathsep}{curr_pypath}" if curr_pypath else qr_pkg_dir
+
 
     exec_result = run_command_with_tee(
         command=cmd_list,
