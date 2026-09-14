@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "runprint"
-version = "0.1.2"
+version = "0.1.3"
 description = "Run anything. Capture everything needed to reproduce it."
 readme = "README.md"
 requires-python = ">=3.9"

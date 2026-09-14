@@ -63,24 +63,54 @@ def main():
     lr = args.lr or cfg.get("model", {}).get("learning_rate", 0.1)
     seed = args.seed if args.seed is not None else cfg.get("experiment", {}).get("seed", 42)
 
-    dataset_path = cfg.get("dataset", {}).get("path", "ml_experiment/data/cancer_dataset.csv")
-    data_file = Path(dataset_path)
+    # Locate dataset path robustly regardless of whether invoked from repo root or ml_experiment/
+    script_dir = Path(__file__).resolve().parent
+    raw_dataset_path = cfg.get("dataset", {}).get("path", "data/cancer_dataset.csv")
+
+    candidates = [
+        Path(raw_dataset_path),
+        script_dir / raw_dataset_path,
+        script_dir / "data" / "cancer_dataset.csv",
+    ]
+    if raw_dataset_path.startswith("ml_experiment/"):
+        candidates.insert(1, script_dir / raw_dataset_path[len("ml_experiment/"):])
+
+    data_file = None
+    for c in candidates:
+        if c.exists():
+            data_file = c
+            break
+
+    if data_file is None:
+        data_file = script_dir / "data" / "cancer_dataset.csv"
 
     print("=" * 60)
     print(f"EXPERIMENT: Model={model_type} | Trees={n_estimators} | Depth={max_depth} | Seed={seed}")
     print("=" * 60)
 
-    # 1. Register input dataset provenance with QR
-    if data_file.exists():
-        qr.input_dataset(
-            name="breast_cancer_wisconsin",
-            uri=str(data_file),
-            version="v1.0",
-        )
-    else:
+    # Register hyperparameters directly in-code
+    qr.params({
+        "model_type": model_type,
+        "n_estimators": n_estimators,
+        "max_depth": max_depth,
+        "learning_rate": lr,
+        "seed": seed,
+    })
+
+    # 1. Ensure dataset exists and register input dataset provenance with QR
+    if not data_file.exists():
         print(f"Dataset not found at {data_file}. Generating now...")
-        from ml_experiment.prepare_data import main as prep_data
+        try:
+            from ml_experiment.prepare_data import main as prep_data
+        except ModuleNotFoundError:
+            from prepare_data import main as prep_data
         prep_data()
+
+    qr.input_dataset(
+        name="breast_cancer_wisconsin",
+        uri=str(data_file),
+        version="v1.0",
+    )
 
     # 2. Load & preprocess data
     df = pd.read_csv(data_file)
@@ -96,27 +126,28 @@ def main():
     X_test_scaled = scaler.transform(X_test)
 
     # 3. Model Initialization
-    start_time = time.time()
-    if model_type == "random_forest":
-        clf = RandomForestClassifier(
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            random_state=seed,
+    with qr.timer("model_initialization"):
+        if model_type == "random_forest":
+            clf = RandomForestClassifier(
+                n_estimators=n_estimators,
+                max_depth=max_depth,
+                random_state=seed,
         )
-    elif model_type == "gradient_boosting":
-        clf = GradientBoostingClassifier(
-            n_estimators=n_estimators,
-            learning_rate=lr,
-            max_depth=max_depth,
-            random_state=seed,
-        )
-    else:
-        clf = LogisticRegression(random_state=seed, max_iter=1000)
+        elif model_type == "gradient_boosting":
+            clf = GradientBoostingClassifier(
+                n_estimators=n_estimators,
+                learning_rate=lr,
+                max_depth=max_depth,
+                random_state=seed,
+            )
+        else:
+            clf = LogisticRegression(random_state=seed, max_iter=1000)
 
     # 4. Train Model
-    print(f"Training {model_type} on {X_train.shape[0]} samples...")
-    clf.fit(X_train_scaled, y_train)
-    train_duration = round(time.time() - start_time, 3)
+    with qr.timer("train_model"):
+        print(f"Training {model_type} on {X_train.shape[0]} samples...")
+        clf.fit(X_train_scaled, y_train)
+    
 
     # 5. Evaluate Performance
     y_pred = clf.predict(X_test_scaled)
@@ -134,7 +165,6 @@ def main():
     print(f"  • Recall:    {rec:.4f}")
     print(f"  • F1 Score:  {f1:.4f}")
     print(f"  • ROC AUC:   {roc_auc:.4f}")
-    print(f"  • Train time: {train_duration}s")
 
     # 6. Log structured metrics to QR
     qr.log({
@@ -143,11 +173,10 @@ def main():
         "recall": rec,
         "f1": f1,
         "roc_auc": roc_auc,
-        "train_time_sec": train_duration,
     })
 
     # 7. Save & register model artifact
-    artifact_dir = Path("ml_experiment/artifacts")
+    artifact_dir = script_dir / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
     model_path = artifact_dir / f"model_{model_type}.pkl"
     with open(model_path, "wb") as f:
@@ -183,13 +212,19 @@ def main():
     plt.close(fig)
 
     qr.artifact(str(plot_path), kind="plot")
-    qr.note(f"Trained {model_type} with acc={acc}, f1={f1} in {train_duration}s")
+    qr.note(f"Trained {model_type} with acc={acc}, f1={f1}")
 
     print(f"\nArtifacts saved and registered:")
     print(f"  - Model: {model_path}")
     print(f"  - Plot:  {plot_path}")
     print("=" * 60)
 
+    # 9. Activate and save experiment run (enables running via Python button or CLI)
+    qr.activate(tag=model_type)
+
+    return clf
+
 
 if __name__ == "__main__":
     main()
+

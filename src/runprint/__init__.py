@@ -6,7 +6,19 @@ Re-exports the QR API: `import runprint` or `import qr`.
 """
 
 import qr
-from qr import __version__, artifact, input_dataset, log, note, timer
+from qr import (
+    __version__,
+    activate,
+    artifact,
+    finish,
+    init,
+    input_dataset,
+    log,
+    note,
+    params,
+    run,
+    timer,
+)
 
 __all__ = [
     "__version__",
@@ -15,4 +27,9 @@ __all__ = [
     "input_dataset",
     "note",
     "timer",
+    "activate",
+    "init",
+    "finish",
+    "params",
+    "run",
 ]

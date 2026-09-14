@@ -21,7 +21,8 @@ Runprint (`qr`) is a lightweight, framework-agnostic, local-first execution wrap
 - **Atomic & Crash-Safe**: Runs are protected against `Ctrl+C` and crashes with pre-run manifests and atomic writes.
 - **Isolated Worktree Rerun**: Rerun past experiments in clean, dedicated Git worktrees without disturbing your active workspace.
 - **Integrity Doctor & Run Diff**: Built-in health diagnostics (`qr doctor`) and side-by-side run comparisons (`qr diff`).
-- **Tiny Python SDK**: Optional semantic logging (`qr.log`), block timing (`qr.timer`), artifact registration (`qr.artifact`), dataset tracking (`qr.input_dataset`), and notes (`qr.note`).
+- **In-Code Activation & Context Manager**: Run scripts directly via IDE Run/Compile buttons using `qr.activate()`, or run hyperparameter search loops with `with qr.run()`.
+- **Tiny Python SDK**: Semantic logging (`qr.log`), in-code parameters (`qr.params`), block timing (`qr.timer`), artifact registration (`qr.artifact`), dataset tracking (`qr.input_dataset`), and notes (`qr.note`).
 
 ---
 
@@ -31,7 +32,7 @@ Runprint (`qr`) is a lightweight, framework-agnostic, local-first execution wrap
 ```bash
 pip install runprint
 ```
-*(Both `qr` and `runprint` commands will be available globally in your terminal).*
+*(Both `qr` and `runprint` commands will be available globally in your terminal. You can also invoke them with `python -m qr` or `python -m runprint`).*
 
 ### From GitHub
 ```bash
@@ -188,37 +189,131 @@ qr doctor --fix
 
 ## Tiny Python SDK
 
-The Python SDK is optional and framework-agnostic. If a script is executed outside of `qr run`, all SDK calls gracefully degrade to safe no-ops.
+The Python SDK is framework-agnostic and supports two execution models:
+1. **CLI Wrapper**: Run your script via `qr run -- python train.py`.
+2. **In-Code Activation & Context Managers**: Run directly via your IDE's **Run / Compile / Debug** button or standard `python train.py`, with zero CLI overhead.
+
+---
+
+### 1. Semantic Logging & Provenance Tracking
 
 ```python
 import qr
 
 # 1. Declare input dataset (auto-calculates SHA256 fingerprint if omitted)
 qr.input_dataset(
-    name="medvqa",
-    uri="data/medvqa_v1.csv",
+    name="breast_cancer",
+    uri="data/cancer_dataset.csv",
     version="v1.0"
 )
 
-# 2. Measure & automatically log pure training duration
+# 2. Log in-code hyperparameters directly (saved to manifest inputs)
+qr.params({
+    "model_type": "random_forest",
+    "n_estimators": 100,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+})
+
+# 3. Measure pure training duration (logged to metrics.jsonl)
 with qr.timer("training_duration_seconds"):
-    # model.fit(X_train, y_train)
-    pass
+    model.fit(X_train, y_train)
 
-# 3. Log structured metrics per step/epoch (saved to metrics.jsonl)
-for epoch in range(epochs):
-    loss, acc = train_step()
-    qr.log({
-        "epoch": epoch,
-        "loss": round(float(loss), 4),
-        "accuracy": round(float(acc), 4)
-    })
+# 4. Log structured metrics per step or epoch
+qr.log({
+    "accuracy": 0.9561,
+    "precision": 0.9583,
+    "f1": 0.9583,
+})
 
-# 4. Register output artifacts (checksum & size tracked, file not duplicated)
-qr.artifact("checkpoints/best_model.pt", kind="model", metadata={"accuracy": 0.88})
+# 5. Register output artifacts (checksum & size tracked, file not duplicated)
+qr.artifact("artifacts/model.pkl", kind="model", metadata={"accuracy": 0.9561})
 
-# 5. Add human or script annotations
-qr.note("Completed warmup phase, learning rate decayed by factor of 0.1")
+# 6. Add human or script annotations
+qr.note("Trained Random Forest baseline with 5-fold cross-validation")
+```
+
+---
+
+### 2. In-Code Activation (`qr.activate()`)
+
+Want to run your code by clicking the **Run** button in VS Code / PyCharm instead of using terminal commands? Simply call `qr.activate()` at the end of your training function or right before `return`:
+
+```python
+def train():
+    # ... prepare data & train model ...
+    qr.input_dataset("dataset", "data/train.csv")
+    qr.params({"max_depth": 6, "n_estimators": 100})
+    qr.log({"accuracy": acc, "f1": f1})
+    qr.artifact("model.pkl", kind="model")
+
+    # Activate & save the experiment run right before return
+    qr.activate(tag="random_forest")
+
+    return model
+
+if __name__ == "__main__":
+    train()
+```
+
+When `qr.activate()` is called:
+- Automatically snapshots Git commit, branch, and uncommitted dirty diffs.
+- Records hardware (CPU, GPU, RAM) and runtime packages (`pip freeze`).
+- Flushes all buffered metrics, artifacts, dataset declarations, and console logs (`stdout`/`stderr`).
+- Updates `.qr/index.sqlite` and outputs the completion banner.
+- **CLI Compatible:** If you execute the same script later with `qr run -- python train.py`, `qr.activate()` automatically detects the CLI session and seamlessly acts as a no-op without creating duplicate runs.
+
+---
+
+### 3. GridSearch & Multi-Run Context Manager (`with qr.run()`)
+
+For hyperparameter search (GridSearch, Optuna, K-Fold cross-validation), use the `with qr.run()` context manager to automatically isolate each trial into its own reproducible run:
+
+```python
+import qr
+from sklearn.ensemble import RandomForestClassifier
+
+param_grid = [
+    {"max_depth": 3, "n_estimators": 50},
+    {"max_depth": 3, "n_estimators": 100},
+    {"max_depth": 6, "n_estimators": 50},
+    {"max_depth": 6, "n_estimators": 100},
+]
+
+# Parent Run: Represents the full optimization session
+with qr.run(tag="grid_search_parent", params={"trials": len(param_grid)}) as session:
+    qr.input_dataset("cancer_data", "data/cancer_dataset.csv")
+
+    # Child Runs: Each trial is an independent run linked to the parent
+    for i, params in enumerate(param_grid, start=1):
+        with qr.run(tag="trial", params=params) as trial:
+            model = RandomForestClassifier(**params)
+            model.fit(X_train, y_train)
+
+            score = model.score(X_test, y_test)
+            qr.log({"trial": i, "accuracy": score})
+            qr.artifact(f"model_{i}.pkl", kind="model")
+        # Exiting with-block automatically finalizes that trial run!
+```
+
+#### Compare Trials Side-by-Side (`qr diff`)
+Because each trial in the GridSearch is an independent run linked via `Lineage: Parent=<session_id>`, you can directly compare any two configurations:
+
+```bash
+qr diff QR-20260914-5BBC QR-20260914-4208
+```
+
+```text
+┌───────────────────────┬──────────────────────────┬──────────────────────────┐
+│ Property              │ QR-20260914-5BBC         │ QR-20260914-4208         │
+├───────────────────────┼──────────────────────────┼──────────────────────────┤
+│ Status                │ completed (exit=0)       │ completed (exit=0)       │
+│ Duration              │ 0.13s                    │ 0.16s                    │
+│ Param: --max_depth    │ 3                        │ 3 (0)                    │
+│ Param: --n_estimators │ 50                       │ 100 (+50)                │
+│ Metric: accuracy      │ 0.9474                   │ 0.9561 (+0.0087)         │
+│ Metric: f1            │ 0.9583                   │ 0.9655 (+0.0072)         │
+└───────────────────────┴──────────────────────────┴──────────────────────────┘
 ```
 
 ---

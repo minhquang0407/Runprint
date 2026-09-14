@@ -4,9 +4,20 @@ QR — Reproducible Research Execution Wrapper
 Run anything. Capture everything needed to reproduce it.
 """
 
-from qr.sdk import artifact, input_dataset, log, note, timer
+from qr.sdk import (
+    activate,
+    artifact,
+    finish,
+    init,
+    input_dataset,
+    log,
+    note,
+    params,
+    run,
+    timer,
+)
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 __all__ = [
     "__version__",
@@ -15,4 +26,9 @@ __all__ = [
     "input_dataset",
     "note",
     "timer",
+    "activate",
+    "init",
+    "finish",
+    "params",
+    "run",
 ]
